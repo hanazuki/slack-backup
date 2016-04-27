@@ -82,17 +82,17 @@ class SlackFileRemover
     datafile = datadir + (id + extname)
 
     metafile.write(JSON.dump(meta))
-    datafile.utime(Time.now, meta['created'])
+    metafile.utime(Time.now, meta['created'])
 
     if meta['url_private']
       stat =
         begin
           datafile.stat
-        ensure Errno::ENOENT
+        rescue Errno::ENOENT
           nil
         end
 
-      if stat && stat.size != meta['size']
+      if stat && stat.size == meta['size']
         warn "Current backup for #{id} has the same size as the metadata. Download skipped"
       else
         open(meta['url_private'], 'Authorization' => "Bearer #{slack_token}") do |file|
