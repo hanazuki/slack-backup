@@ -1,0 +1,123 @@
+#!/usr/bin/env ruby
+require 'bundler/setup'
+require 'json'
+require 'pathname'
+require 'open-uri'
+require 'slack'
+require 'optparse'
+require 'pry'
+
+class SlackFileRemover
+  attr_reader :slack_token, :backup_dir, :delete_files, :keep_days
+
+  def initialize(slack_token:, backup_dir:, delete_files: false, keep_days: 30*6)
+    @slack_token = slack_token
+    @backup_dir = Pathname(backup_dir)
+    @delete_files = delete_files
+    @keep_days = keep_days
+  end
+
+  def client
+    @client ||= Slack.client(token: slack_token)
+  end
+
+  def run(dryrun: true)
+    remove_before = Time.now.to_i - 60*60*24 * keep_days
+
+    fetch_files.sort_by {|meta| meta['created'] }.each do |meta|
+      to_remove = delete_files && (remove_before && meta['created'] < remove_before) && !meta['pinned_to']
+      to_backup = meta['is_public']
+
+      if to_backup || to_remove
+        age = ((Time.now.to_i - meta['created']) / (60*60*24)).to_i
+        actions = ((dryrun ? 'would ' : '') + [('backup' if to_backup), ('remove' if to_remove)].compact.join(' and ')).capitalize
+        puts "#{actions} #{meta['id']} (#{age} days old)"
+
+        unless dryrun
+          if to_backup
+            begin
+              do_backup(meta)
+            rescue
+              warn "Error during backup: #{$!}"
+              warn 'Removal skipped' if to_remove
+              next
+            end
+          end
+
+          if to_remove
+            begin
+             do_remove(meta)
+            rescue
+              warn "Error during removal: #{$!}"
+            end
+          end
+        end
+      end
+    end
+  end
+
+  def fetch_files
+    files = []
+    loop.with_index(1) do |_, i|
+      result = client.files_list(page: i)
+      break if result['files'].empty?
+      files.concat(result['files'])
+    end
+    files
+  end
+
+  def do_remove(meta)
+    client.files_delete(file: meta['id'])
+  end
+
+  def do_backup(meta)
+    metadir = (backup_dir + 'meta').tap(&:mkpath)
+    datadir = (backup_dir + 'data').tap(&:mkpath)
+    chandir = (backup_dir + 'channels').tap(&:mkpath)
+
+    id = meta['id']
+    extname = File.extname(meta['name'])
+
+    metafile = metadir + (id + '.json')
+    datafile = datadir + (id + extname)
+
+    metafile.write(JSON.dump(meta))
+    datafile.utime(Time.now, meta['created'])
+
+    if meta['url_private']
+      stat =
+        begin
+          datafile.stat
+        ensure Errno::ENOENT
+          nil
+        end
+
+      if stat && stat.size != meta['size']
+        warn "Current backup for #{id} has the same size as the metadata. Download skipped"
+      else
+        open(meta['url_private'], 'Authorization' => "Bearer #{slack_token}") do |file|
+          datafile.write(file.read)
+          datafile.utime(Time.now, meta['created'])
+        end
+      end
+
+      meta['channels'].each do |chan|
+        link = (chandir + chan).tap(&:mkpath) + (id + extname)
+        link.unlink rescue nil
+        link.make_symlink('../../data/' + (id + extname))
+      end
+    end
+  end
+end
+
+params = ARGV.getopts(
+  '',
+  'delete',
+  'backup-dir:',
+  'dryrun',
+)
+
+fail "Set SLACK_TOKEN environment variable" unless ENV['SLACK_TOKEN']
+fail "Specify --backup-dir=DIR" unless params['backup-dir']
+
+SlackFileRemover.new(slack_token: ENV['SLACK_TOKEN'], backup_dir: params['backup-dir'], delete_files: params['delete']).run(dryrun: params['dryrun'])
