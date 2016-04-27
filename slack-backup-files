@@ -85,20 +85,22 @@ class SlackFileRemover
     metafile.utime(Time.now, meta['created'])
 
     if meta['url_private']
-      stat =
+      size =
         begin
-          datafile.stat
+          datafile.size
         rescue Errno::ENOENT
           nil
         end
 
-      if stat && stat.size == meta['size']
+      if size == meta['size']
         warn "Current backup for #{id} has the same size as the metadata. Download skipped"
       else
         open(meta['url_private'], 'Authorization' => "Bearer #{slack_token}") do |file|
           datafile.write(file.read)
           datafile.utime(Time.now, meta['created'])
         end
+
+        fail 'Downloaded file has unexpected size' if datafile.size != meta['size']
       end
 
       meta['channels'].each do |chan|
