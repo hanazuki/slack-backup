@@ -5,16 +5,15 @@ require 'pathname'
 require 'open-uri'
 require 'slack'
 require 'optparse'
-require 'pry'
 
 class SlackFileRemover
-  attr_reader :slack_token, :backup_dir, :delete_files, :keep_days
+  attr_reader :slack_token, :backup_dir, :delete_after, :force_delete_after
 
-  def initialize(slack_token:, backup_dir:, delete_files: false, keep_days: 30*6)
+  def initialize(slack_token:, backup_dir:, delete_after: nil, force_delete_after: nil)
     @slack_token = slack_token
     @backup_dir = Pathname(backup_dir)
-    @delete_files = delete_files
-    @keep_days = keep_days
+    @delete_after = delete_after
+    @force_delete_after = force_delete_after
   end
 
   def client
@@ -22,16 +21,16 @@ class SlackFileRemover
   end
 
   def run(dryrun: true)
-    remove_before = Time.now.to_i - 60*60*24 * keep_days
-
     fetch_files.sort_by {|meta| meta['created'] }.each do |meta|
-      to_remove = delete_files && (remove_before && meta['created'] < remove_before) && !meta['pinned_to']
+      age = (Time.now.to_f - meta['created']) / (60*60*24)  # in days
+
+      to_delete = delete_after && delete_after > age && !meta['pinned_to']
+      to_force_delete = force_delete_after && force_delete_after > age && !meta['pinned_to']
       to_backup = meta['is_public']
 
-      if to_backup || to_remove
-        age = ((Time.now.to_i - meta['created']) / (60*60*24)).to_i
-        actions = ((dryrun ? 'would ' : '') + [('backup' if to_backup), ('remove' if to_remove)].compact.join(' and ')).capitalize
-        puts "#{actions} #{meta['id']} (#{age} days old)"
+      if to_backup || to_delete
+        actions = ((dryrun ? 'would ' : '') + [('backup' if to_backup), ('delete' if to_delete)].compact.join(' and ')).capitalize
+        puts "#{actions} #{meta['id']} (#{age.to_i} days old)"
 
         unless dryrun
           if to_backup
@@ -39,14 +38,15 @@ class SlackFileRemover
               do_backup(meta)
             rescue
               warn "Error during backup: #{$!}"
-              warn 'Removal skipped' if to_remove
-              next
+              warn 'Removal skipped' if to_delete && !to_force_delete
+              warn 'Delete anyway since it is too old' if to_force_delete
+              next unless to_delete && to_force_delete
             end
           end
 
-          if to_remove
+          if to_delete
             begin
-             do_remove(meta)
+             do_delete(meta)
             rescue
               warn "Error during removal: #{$!}"
             end
@@ -66,7 +66,7 @@ class SlackFileRemover
     files
   end
 
-  def do_remove(meta)
+  def do_delete(meta)
     client.files_delete(file: meta['id'])
   end
 
@@ -100,7 +100,9 @@ class SlackFileRemover
           datafile.utime(Time.now, meta['created'])
         end
 
-        fail 'Downloaded file has unexpected size' if datafile.size != meta['size']
+        if datafile.size != meta['size']
+          fail 'Downloaded file has unexpected size'
+        end
       end
 
       meta['channels'].each do |chan|
@@ -113,13 +115,19 @@ class SlackFileRemover
 end
 
 params = ARGV.getopts(
-  '',
-  'delete',
+  '',  # no short options
   'backup-dir:',
   'dryrun',
+  'delete-after:',
+  'force-delete-after:'
 )
 
 fail "Set SLACK_TOKEN environment variable" unless ENV['SLACK_TOKEN']
 fail "Specify --backup-dir=DIR" unless params['backup-dir']
 
-SlackFileRemover.new(slack_token: ENV['SLACK_TOKEN'], backup_dir: params['backup-dir'], delete_files: params['delete']).run(dryrun: params['dryrun'])
+SlackFileRemover.new(
+  slack_token: ENV['SLACK_TOKEN'],
+  backup_dir: params['backup-dir'],
+  delete_after: params['delete_after'] && Float(params['delete_after']),
+  force_delete_after: params['force_delete_after'] && Float(params['force_delete_after']),
+).run(dryrun: params['dryrun'])
