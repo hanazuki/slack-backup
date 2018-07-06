@@ -1,6 +1,6 @@
 # slack-backup-files
 
-Back up the files uploaded to your Slack workspace in case of disaster and in case of running out of your free-plan storage :)
+Back up the files uploaded to your Slack workspace in case of disaster and in case of running out of your free-plan storage :slightly_smiling_face:
 
 ## Usage
 
