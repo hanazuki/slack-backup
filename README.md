@@ -15,5 +15,5 @@ slack-bakcup-files --backup=/path/to/backup/file --delete-after=30 --force-delet
 - Only files uploaded to a public channel (not a private group or direct message) will be backed up.
 - Any files pinned to a channel will be kept on Slack.
 - Only files accessible using the `SLACK_TOKEN` will be backed up and deleted.
-  So use a token for a workspace admin if you want to delete files, and note that any file uploaded to a private channel that the token owner does not belong to cannot be delete.
+  So use a token for a workspace admin if you want to delete files, and note that any file uploaded to a private channel that the token owner does not belong to cannot be deleted.
 
